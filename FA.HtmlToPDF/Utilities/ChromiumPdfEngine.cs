@@ -22,7 +22,6 @@ namespace FA.HtmlToPDF.Utilities
     {
         // 1 PDF point = 1/72 inch; 1 inch = 25.4 mm
         private const double PointsToInches = 1.0 / 72.0;
-        private const double PointsToMm = 25.4 / 72.0;
 
         public static bool TryConvert(string html, HtmlToPdfOptions options, out byte[] pdfBytes, out Exception failure)
         {
@@ -39,13 +38,10 @@ namespace FA.HtmlToPDF.Utilities
                     return false;
                 }
 
-                // Inject @page CSS so Chrome knows the correct paper size/margins
-                var preparedHtml = InjectPrintStyles(html, options);
-
                 var tempRoot = Path.Combine(Path.GetTempPath(), "FA.HtmlToPDF", Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(tempRoot);
                 var htmlPath = Path.Combine(tempRoot, "input.html");
-                File.WriteAllText(htmlPath, preparedHtml, new UTF8Encoding(false));
+                File.WriteAllText(htmlPath, html, new UTF8Encoding(false));
                 var htmlUri = new Uri(htmlPath).AbsoluteUri;
 
                 // Pick a random free TCP port for Chrome remote debugging
@@ -61,11 +57,12 @@ namespace FA.HtmlToPDF.Utilities
                         "--allow-file-access-from-files " +
                         "--enable-local-file-accesses " +
                         "--disable-extensions " +
-                        "--disable-background-networking " +
                         "--remote-debugging-port=" + debugPort + " " +
                         "about:blank",
                     UseShellExecute = false,
                     CreateNoWindow = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
                     WorkingDirectory = tempRoot
                 };
 
@@ -100,14 +97,14 @@ namespace FA.HtmlToPDF.Utilities
                     // Paper dimensions in inches (CDP Page.printToPDF uses inches)
                     var paperW = options.PageWidth * PointsToInches;
                     var paperH = options.PageHeight * PointsToInches;
-                    // Margins are intentionally 0 here: the HTML's own body { padding }
-                    // handles whitespace. Adding margins both in @page CSS and in
-                    // Page.printToPDF causes double-margin and a narrower content area.
 
                     pdfBytes = RunCdpSession(
                         wsUrl, htmlUri,
                         paperW, paperH,
-                        0, 0, 0, 0,
+                        options.MarginTop * PointsToInches,
+                        options.MarginBottom * PointsToInches,
+                        options.MarginLeft * PointsToInches,
+                        options.MarginRight * PointsToInches,
                         options.ChromiumTimeoutMs);
 
                     if (pdfBytes == null || pdfBytes.Length == 0)
@@ -166,8 +163,14 @@ namespace FA.HtmlToPDF.Utilities
                 // 3. Wait for Page.loadEventFired — page + CSS fully loaded
                 WaitForCdpEvent(ws, "Page.loadEventFired", timeoutMs: 15000, cts.Token);
 
-                // 4. Short extra pause for fonts / images
-                Thread.Sleep(600);
+                // 4. Wait for all fonts to finish loading via document.fonts.ready.
+                //    This handles both local and web fonts (Google Fonts, CDN, etc.).
+                //    awaitPromise:true tells Chrome to resolve the FontFaceSet promise
+                //    before returning — no fixed sleep needed.
+                SendCdp(ws, 4, "Runtime.evaluate",
+                    "{\"expression\":\"document.fonts.ready\",\"awaitPromise\":true}",
+                    cts.Token);
+                ReadUntilResponseId(ws, 4, cts.Token);
 
                 // 5. Page.printToPDF — printBackground:true is the critical parameter
                 //    that tells Chrome to print borders, backgrounds and box-shadows.
@@ -186,10 +189,10 @@ namespace FA.HtmlToPDF.Utilities
                     "}}",
                     paperW, paperH, mTop, mBot, mLeft, mRight);
 
-                SendCdp(ws, 3, "Page.printToPDF", printParams, cts.Token);
+                SendCdp(ws, 5, "Page.printToPDF", printParams, cts.Token);
 
                 // 6. Read response — contains base64-encoded PDF in result.data
-                var response = ReadUntilResponseId(ws, 3, cts.Token);
+                var response = ReadUntilResponseId(ws, 5, cts.Token);
                 return string.IsNullOrEmpty(response) ? null : ExtractBase64PdfData(response);
             }
         }
@@ -344,78 +347,6 @@ namespace FA.HtmlToPDF.Utilities
         private static string EscapeJson(string s)
         {
             return s.Replace("\\", "\\\\").Replace("\"", "\\\"");
-        }
-
-        // ─────────────────────────────────────────────────────────────────────────
-        // HTML preparation — inject @page + print-color-adjust
-        // ─────────────────────────────────────────────────────────────────────────
-
-        private static string InjectPrintStyles(string html, HtmlToPdfOptions options)
-        {
-            var pageWmm = (options.PageWidth * PointsToMm).ToString("F2", CultureInfo.InvariantCulture);
-            var pageHmm = (options.PageHeight * PointsToMm).ToString("F2", CultureInfo.InvariantCulture);
-            var mTopMm = (options.MarginTop * PointsToMm).ToString("F2", CultureInfo.InvariantCulture);
-            var mBotMm = (options.MarginBottom * PointsToMm).ToString("F2", CultureInfo.InvariantCulture);
-            var mLeftMm = (options.MarginLeft * PointsToMm).ToString("F2", CultureInfo.InvariantCulture);
-            var mRightMm = (options.MarginRight * PointsToMm).ToString("F2", CultureInfo.InvariantCulture);
-            var vpPx = (int)Math.Round(options.PageWidth / 72.0 * 96.0);
-
-            var styleBlock =
-                "<style type='text/css'>\n" +
-                // Paper size only — margin set to 0 here.
-                // The HTML's own body { padding } handles whitespace around content.
-                // Setting @page margin AND body padding causes double-margin / shrunken layout.
-                "@page {\n" +
-                "  size: " + pageWmm + "mm " + pageHmm + "mm;\n" +
-                "  margin: 0;\n" +
-                "}\n" +
-                // Force Chrome print pipeline to render all colours/borders
-                "* {\n" +
-                "  -webkit-print-color-adjust: exact !important;\n" +
-                "  print-color-adjust: exact !important;\n" +
-                "  color-adjust: exact !important;\n" +
-                "}\n" +
-                // Chrome does NOT inherit font-size into <table>/<td> by default.
-                // Without this reset, table text renders at the browser default (~16px)
-                // instead of the 11px defined in the .offrctl scoped CSS classes.
-                "html, body, table, tbody, tr, td, th, p, div, span {\n" +
-                "  font-family: Arial, sans-serif;\n" +
-                "  font-size: 11px;\n" +
-                "}\n" +
-                // Table layout normalization
-                "table {\n" +
-                "  border-spacing: 0;\n" +
-                "  empty-cells: show;\n" +
-                "}\n" +
-                // Honour the HTML border attribute so border='1' tables show borders
-                "table[border] td, table[border] th {\n" +
-                "  border: 1px solid #000;\n" +
-                "}\n" +
-                "td[width], th[width] {\n" +
-                "  min-width: 0;\n" +
-                "}\n" +
-                "</style>";
-
-            var viewportMeta = "<meta name='viewport' content='width=" + vpPx + ", initial-scale=1'>";
-
-            var headClose = html.IndexOf("</head>", StringComparison.OrdinalIgnoreCase);
-            if (headClose >= 0)
-            {
-                return html.Substring(0, headClose)
-                    + "\n" + viewportMeta + "\n" + styleBlock + "\n"
-                    + html.Substring(headClose);
-            }
-
-            var headOpen = html.IndexOf("<head>", StringComparison.OrdinalIgnoreCase);
-            if (headOpen >= 0)
-            {
-                var ins = headOpen + "<head>".Length;
-                return html.Substring(0, ins)
-                    + "\n" + viewportMeta + "\n" + styleBlock + "\n"
-                    + html.Substring(ins);
-            }
-
-            return viewportMeta + "\n" + styleBlock + "\n" + html;
         }
 
         // ─────────────────────────────────────────────────────────────────────────
