@@ -7,7 +7,6 @@ using System.IO;
 using System.Text;
 using FA.HtmlToPDF.Abstractions;
 using FA.HtmlToPDF.Models;
-using FA.HtmlToPDF.Utilities;
 
 namespace FA.HtmlToPDF.Pdf
 {
@@ -188,34 +187,12 @@ namespace FA.HtmlToPDF.Pdf
         private static string BuildInfoObject(HtmlToPdfOptions options)
         {
             var creationDate = DateTime.UtcNow.ToString("yyyyMMddHHmmss", CultureInfo.InvariantCulture);
-            var parts = new List<string>
-            {
-                "/CreationDate (D:" + creationDate + "Z)",
-                "/Producer " + PdfEncodingHelper.ToPdfUnicodeHexString(options.Producer ?? "FA.HtmlToPDF"),
-                "/Creator " + PdfEncodingHelper.ToPdfUnicodeHexString(options.Creator ?? "FA.HtmlToPDF")
-            };
-
-            if (!string.IsNullOrWhiteSpace(options.Title))
-            {
-                parts.Add("/Title " + PdfEncodingHelper.ToPdfUnicodeHexString(options.Title));
-            }
-
-            if (!string.IsNullOrWhiteSpace(options.Author))
-            {
-                parts.Add("/Author " + PdfEncodingHelper.ToPdfUnicodeHexString(options.Author));
-            }
-
-            if (!string.IsNullOrWhiteSpace(options.Subject))
-            {
-                parts.Add("/Subject " + PdfEncodingHelper.ToPdfUnicodeHexString(options.Subject));
-            }
-
-            if (!string.IsNullOrWhiteSpace(options.Keywords))
-            {
-                parts.Add("/Keywords " + PdfEncodingHelper.ToPdfUnicodeHexString(options.Keywords));
-            }
-
-            return "<< " + string.Join(" ", parts) + " >>";
+            return
+                "<< " +
+                "/CreationDate (D:" + creationDate + "Z) " +
+                "/Producer (FA.HtmlToPDF) " +
+                "/Creator (FA.HtmlToPDF) " +
+                ">>";
         }
 
         private static string BuildImagePlacementStream(ImageSlice slice, HtmlToPdfOptions options, string imageName)

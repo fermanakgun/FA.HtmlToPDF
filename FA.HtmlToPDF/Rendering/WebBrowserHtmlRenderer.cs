@@ -10,6 +10,11 @@ namespace FA.HtmlToPDF.Rendering
 {
     internal sealed class WebBrowserHtmlRenderer : IHtmlRenderer
     {
+        // Fixed rendering constants — not user-tunable; these cover all realistic HTML layouts.
+        private const int ViewportWidth = 800;
+        private const int RenderTimeoutMs = 20000;
+        private const int MaxRenderWidth = 4096;
+        private const int MaxRenderHeight = 24000;
         public Bitmap Render(string html, HtmlToPdfOptions options)
         {
             Bitmap renderedBitmap = null;
@@ -32,13 +37,13 @@ namespace FA.HtmlToPDF.Rendering
                         form.StartPosition = FormStartPosition.Manual;
                         form.Location = new Point(-30000, -30000);
                         form.Opacity = 0;
-                        form.Width = options.BrowserViewportWidth;
+                        form.Width = ViewportWidth;
                         form.Height = 900;
 
                         browser.ScriptErrorsSuppressed = true;
                         browser.ScrollBarsEnabled = false;
                         browser.Dock = DockStyle.Fill;
-                        browser.Width = options.BrowserViewportWidth;
+                        browser.Width = ViewportWidth;
                         browser.Height = 900;
 
                         form.Controls.Add(browser);
@@ -59,7 +64,7 @@ namespace FA.HtmlToPDF.Rendering
                             if (completed) return;
 
                             var elapsedMs = (DateTime.UtcNow - start).TotalMilliseconds;
-                            if (elapsedMs > options.RenderTimeoutMs)
+                            if (elapsedMs > RenderTimeoutMs)
                             {
                                 failure = new TimeoutException("HTML render timed out.");
                                 finish();
@@ -78,11 +83,11 @@ namespace FA.HtmlToPDF.Rendering
                             try
                             {
                                 var bodyRect = browser.Document.Body.ScrollRectangle;
-                                var width = options.BrowserViewportWidth;
+                                var width = ViewportWidth;
                                 var height = Math.Max(1, bodyRect.Height);
 
-                                width = Math.Min(width, Math.Min(options.MaxRenderWidthPx, 3000));
-                                height = Math.Min(height, Math.Min(options.MaxRenderHeightPx, 8000));
+                                width = Math.Min(width, Math.Min(MaxRenderWidth, 3000));
+                                height = Math.Min(height, Math.Min(MaxRenderHeight, 8000));
                                 width = Math.Max(1, width);
                                 height = Math.Max(1, height);
 

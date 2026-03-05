@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using FA.HtmlToPDF.Abstractions;
 using FA.HtmlToPDF.Models;
-using FA.HtmlToPDF.Samples;
 using FA.HtmlToPDF.Utilities;
 
 namespace FA.HtmlToPDF.Services
@@ -66,11 +65,5 @@ namespace FA.HtmlToPDF.Services
 
             File.WriteAllBytes(outputFilePath, bytes);
         }
-
-        public void SaveSampleReceiptPdf(string outputFilePath, HtmlToPdfOptions options = null)
-        {
-            SaveToFile(HtmlSamples.ReceiptHtml, outputFilePath, options);
-        }
-
     }
 }

@@ -51,12 +51,10 @@
     <Compile Include="Models\ImageSlice.cs" />
     <Compile Include="Pdf\PdfImageDocumentBuilder.cs" />
     <Compile Include="Rendering\WebBrowserHtmlRenderer.cs" />
-    <Compile Include="Samples\HtmlSamples.cs" />
     <Compile Include="Services\HtmlToPdfConverter.cs" />
     <Compile Include="Services\HtmlToPdfService.cs" />
     <Compile Include="Utilities\ChromiumPdfEngine.cs" />
     <Compile Include="Utilities\HtmlContentPreprocessor.cs" />
-    <Compile Include="Utilities\PdfEncodingHelper.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>

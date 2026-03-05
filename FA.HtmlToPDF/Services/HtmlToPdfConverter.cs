@@ -38,16 +38,5 @@ namespace FA.HtmlToPDF
         {
             DefaultService.SaveToFile(html, outputFilePath, options);
         }
-
-        public static void SaveSampleReceiptPdf(string outputFilePath)
-        {
-            DefaultService.SaveSampleReceiptPdf(outputFilePath);
-        }
-
-        public static void SaveSampleReceiptPdf(string outputFilePath, HtmlToPdfOptions options)
-        {
-            DefaultService.SaveSampleReceiptPdf(outputFilePath, options);
-        }
-
     }
 }

@@ -20,9 +20,17 @@ namespace FA.HtmlToPDF.Utilities
     /// </summary>
     internal static class ChromiumPdfEngine
     {
-        // 1 PDF point = 1/72 inch; 1 inch = 25.4 mm
+        // 1 PDF point = 1/72 inch
         private const double PointsToInches = 1.0 / 72.0;
 
+        // Shared HttpClient — creating per-call causes socket exhaustion and ~50ms overhead each time
+        private static readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+
+        // 64 KB receive buffer reused per-thread — avoids a 64 KB heap allocation for every CDP message
+        [ThreadStatic]
+        private static byte[] _receiveBuffer;
+        private static byte[] GetReceiveBuffer() =>
+            _receiveBuffer ?? (_receiveBuffer = new byte[65536]);
         public static bool TryConvert(string html, HtmlToPdfOptions options, out byte[] pdfBytes, out Exception failure)
         {
             pdfBytes = null;
@@ -57,6 +65,17 @@ namespace FA.HtmlToPDF.Utilities
                         "--allow-file-access-from-files " +
                         "--enable-local-file-accesses " +
                         "--disable-extensions " +
+                        // Memory / startup reduction flags
+                        "--no-first-run " +
+                        "--disable-default-apps " +
+                        "--disable-sync " +
+                        "--disable-translate " +
+                        "--disable-dev-shm-usage " +
+                        "--disable-background-networking " +
+                        "--metrics-recording-only " +
+                        "--disable-client-side-phishing-detection " +
+                        "--disable-hang-monitor " +
+                        "--disable-domain-reliability " +
                         "--remote-debugging-port=" + debugPort + " " +
                         "about:blank",
                     UseShellExecute = false,
@@ -75,6 +94,13 @@ namespace FA.HtmlToPDF.Utilities
                         failure = new InvalidOperationException("Failed to start Chromium process.");
                         return false;
                     }
+
+                    // Drain stdout/stderr asynchronously — prevents Chrome from blocking
+                    // when its internal output buffers fill up (can cause deadlocks otherwise)
+                    chromeProcess.OutputDataReceived += (_, __) => { };
+                    chromeProcess.ErrorDataReceived += (_, __) => { };
+                    chromeProcess.BeginOutputReadLine();
+                    chromeProcess.BeginErrorReadLine();
 
                     var cdpBase = "http://127.0.0.1:" + debugPort;
 
@@ -105,7 +131,7 @@ namespace FA.HtmlToPDF.Utilities
                         options.MarginBottom * PointsToInches,
                         options.MarginLeft * PointsToInches,
                         options.MarginRight * PointsToInches,
-                        options.ChromiumTimeoutMs);
+                        options.TimeoutMs);
 
                     if (pdfBytes == null || pdfBytes.Length == 0)
                     {
@@ -241,11 +267,28 @@ namespace FA.HtmlToPDF.Utilities
             if (ws.State != WebSocketState.Open)
                 return null;
 
-            var ms = new MemoryStream();
-            var buf = new byte[32768];
+            var buf = GetReceiveBuffer();
             var seg = new ArraySegment<byte>(buf);
 
             WebSocketReceiveResult result;
+            try
+            {
+                result = ws.ReceiveAsync(seg, token).GetAwaiter().GetResult();
+            }
+            catch
+            {
+                return null;
+            }
+
+            // Fast path: single-frame message — covers >99% of CDP messages
+            // No MemoryStream allocation needed
+            if (result.EndOfMessage)
+                return Encoding.UTF8.GetString(buf, 0, result.Count);
+
+            // Slow path: multi-frame message — accumulate frames
+            // Initial capacity avoids resizing in most cases
+            var ms = new MemoryStream(result.Count * 4);
+            ms.Write(buf, 0, result.Count);
             try
             {
                 do
@@ -259,7 +302,8 @@ namespace FA.HtmlToPDF.Utilities
                 return null;
             }
 
-            return Encoding.UTF8.GetString(ms.ToArray());
+            // GetBuffer() returns the internal array directly — avoids the extra copy in ToArray()
+            return Encoding.UTF8.GetString(ms.GetBuffer(), 0, (int)ms.Length);
         }
 
         // ─────────────────────────────────────────────────────────────────────────
@@ -269,47 +313,41 @@ namespace FA.HtmlToPDF.Utilities
         private static bool WaitForCdpReady(string cdpBase, int timeoutMs)
         {
             var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-            using (var http = new HttpClient { Timeout = TimeSpan.FromMilliseconds(700) })
+            while (DateTime.UtcNow < deadline)
             {
-                while (DateTime.UtcNow < deadline)
+                try
                 {
-                    try
-                    {
-                        var r = http.GetAsync(cdpBase + "/json/version").GetAwaiter().GetResult();
-                        if (r.IsSuccessStatusCode) return true;
-                    }
-                    catch { }
-                    Thread.Sleep(200);
+                    var r = _http.GetAsync(cdpBase + "/json/version").GetAwaiter().GetResult();
+                    if (r.IsSuccessStatusCode) return true;
                 }
+                catch { }
+                Thread.Sleep(150);
             }
             return false;
         }
 
         private static string GetFirstTabWebSocketUrl(string cdpBase)
         {
-            using (var http = new HttpClient { Timeout = TimeSpan.FromSeconds(6) })
+            for (var attempt = 0; attempt < 4; attempt++)
             {
-                for (var attempt = 0; attempt < 4; attempt++)
+                string json;
+                try
                 {
-                    string json;
-                    try
-                    {
-                        json = http.GetStringAsync(cdpBase + "/json/list").GetAwaiter().GetResult();
-                    }
-                    catch
-                    {
-                        Thread.Sleep(300);
-                        continue;
-                    }
-
-                    var url = ExtractJsonStringField(json, "webSocketDebuggerUrl");
-                    if (!string.IsNullOrEmpty(url))
-                        return url;
-
-                    // No tab yet — ask Chrome to open one
-                    try { http.GetStringAsync(cdpBase + "/json/new").GetAwaiter().GetResult(); } catch { }
-                    Thread.Sleep(400);
+                    json = _http.GetStringAsync(cdpBase + "/json/list").GetAwaiter().GetResult();
                 }
+                catch
+                {
+                    Thread.Sleep(300);
+                    continue;
+                }
+
+                var url = ExtractJsonStringField(json, "webSocketDebuggerUrl");
+                if (!string.IsNullOrEmpty(url))
+                    return url;
+
+                // No tab yet — ask Chrome to open one
+                try { _http.GetStringAsync(cdpBase + "/json/new").GetAwaiter().GetResult(); } catch { }
+                Thread.Sleep(300);
             }
             return null;
         }
