@@ -156,30 +156,43 @@ namespace FA.HtmlToPDF.Utilities
                     cts.Token);
                 ReadUntilResponseId(ws, 4, cts.Token);
 
-                // 5. Auto-detect page size from rendered content when not explicitly set.
-                //    Page.getLayoutMetrics returns the full content dimensions in CSS pixels
-                //    (Chrome renders at 96 PPI), independent of any viewport setting.
-                if (paperW <= 0 || paperH <= 0)
+                // 5. Page.printToPDF — Chrome handles everything natively (layout, page breaks, etc.).
+                //    printBackground:true ensures borders/backgrounds are rendered.
+                //    If explicit paper dimensions are provided they are forwarded;
+                //    otherwise the parameters are omitted and Chrome uses its default (A4).
+                string printParams;
+                if (paperW > 0 && paperH > 0)
                 {
-                    ResolveAutoPageSize(ws, cts.Token, ref paperW, ref paperH);
+                    printParams = string.Format(
+                        CultureInfo.InvariantCulture,
+                        "{{" +
+                            "\"printBackground\":true," +
+                            "\"displayHeaderFooter\":false," +
+                            "\"paperWidth\":{0}," +
+                            "\"paperHeight\":{1}," +
+                            "\"marginTop\":{2}," +
+                            "\"marginBottom\":{3}," +
+                            "\"marginLeft\":{4}," +
+                            "\"marginRight\":{5}" +
+                        "}}",
+                        paperW, paperH, mTop, mBot, mLeft, mRight);
                 }
-
-                // 6. Page.printToPDF — printBackground:true is the critical parameter
-                //    that tells Chrome to print borders, backgrounds and box-shadows.
-                //    The CLI --print-to-pdf flag has no equivalent for this.
-                var printParams = string.Format(
-                    CultureInfo.InvariantCulture,
-                    "{{" +
-                        "\"printBackground\":true," +
-                        "\"displayHeaderFooter\":false," +
-                        "\"paperWidth\":{0}," +
-                        "\"paperHeight\":{1}," +
-                        "\"marginTop\":{2}," +
-                        "\"marginBottom\":{3}," +
-                        "\"marginLeft\":{4}," +
-                        "\"marginRight\":{5}" +
-                    "}}",
-                    paperW, paperH, mTop, mBot, mLeft, mRight);
+                else
+                {
+                    // No paper size → let Chrome use its default (A4: 8.27 × 11.69 in).
+                    // Margins are still forwarded when non-zero.
+                    printParams = string.Format(
+                        CultureInfo.InvariantCulture,
+                        "{{" +
+                            "\"printBackground\":true," +
+                            "\"displayHeaderFooter\":false," +
+                            "\"marginTop\":{0}," +
+                            "\"marginBottom\":{1}," +
+                            "\"marginLeft\":{2}," +
+                            "\"marginRight\":{3}" +
+                        "}}",
+                        mTop, mBot, mLeft, mRight);
+                }
 
                 SendCdp(ws, 5, "Page.printToPDF", printParams, cts.Token);
 
@@ -187,33 +200,6 @@ namespace FA.HtmlToPDF.Utilities
                 var response = ReadUntilResponseId(ws, 5, cts.Token);
                 return string.IsNullOrEmpty(response) ? null : ExtractBase64PdfData(response);
             }
-        }
-
-        // ─────────────────────────────────────────────────────────────────────────
-        // Auto page-size resolution via CDP
-        // ─────────────────────────────────────────────────────────────────────────
-
-        private static void ResolveAutoPageSize(
-            ClientWebSocket ws, CancellationToken token,
-            ref double paperW, ref double paperH)
-        {
-            // Page.getLayoutMetrics returns contentSize in CSS pixels (Chrome at 96 PPI).
-            // This is the preferred CDP method — it measures the full rendered content
-            // regardless of the current viewport size.
-            SendCdp(ws, 6, "Page.getLayoutMetrics", "{}", token);
-            var resp = ReadUntilResponseId(ws, 6, token);
-            if (resp == null) return;
-
-            // Find the "contentSize" block in the JSON response, then extract width/height.
-            var csIdx = resp.IndexOf("\"contentSize\"", StringComparison.Ordinal);
-            if (csIdx < 0) return;
-
-            var w = ExtractJsonDouble(resp, "width", csIdx);
-            var h = ExtractJsonDouble(resp, "height", csIdx);
-
-            // Fallback to A4 if the query returns nothing sensible
-            if (paperW <= 0) paperW = w > 0 ? w / 96.0 : 8.27;
-            if (paperH <= 0) paperH = h > 0 ? h / 96.0 : 11.69;
         }
 
         /// <summary>
