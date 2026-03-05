@@ -54,6 +54,7 @@
     <Compile Include="Services\HtmlToPdfConverter.cs" />
     <Compile Include="Services\HtmlToPdfService.cs" />
     <Compile Include="Utilities\ChromiumPdfEngine.cs" />
+    <Compile Include="Utilities\ChromiumProcessHost.cs" />
     <Compile Include="Utilities\HtmlContentPreprocessor.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

@@ -1,10 +1,6 @@
 using System;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Net;
-using System.Net.Http;
-using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
@@ -23,141 +19,102 @@ namespace FA.HtmlToPDF.Utilities
         // 1 PDF point = 1/72 inch
         private const double PointsToInches = 1.0 / 72.0;
 
-        // Shared HttpClient — creating per-call causes socket exhaustion and ~50ms overhead each time
-        private static readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
-
         // 64 KB receive buffer reused per-thread — avoids a 64 KB heap allocation for every CDP message
         [ThreadStatic]
         private static byte[] _receiveBuffer;
         private static byte[] GetReceiveBuffer() =>
             _receiveBuffer ?? (_receiveBuffer = new byte[65536]);
+
+        // How many times a single conversion is retried before giving up.
+        // Each retry re-acquires a fresh tab; if Chrome crashed it is restarted.
+        private const int MaxRetries = 2;
+
         public static bool TryConvert(string html, HtmlToPdfOptions options, out byte[] pdfBytes, out Exception failure)
         {
             pdfBytes = null;
             failure = null;
 
+            // Write HTML to a temp file so Chrome can load it via file:// URL.
+            // Each conversion gets its own directory — concurrent calls never collide.
+            var tempRoot = Path.Combine(Path.GetTempPath(), "FA.HtmlToPDF", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tempRoot);
+            var htmlPath = Path.Combine(tempRoot, "input.html");
+            File.WriteAllText(htmlPath, html, new UTF8Encoding(false));
+            var htmlUri = new Uri(htmlPath).AbsoluteUri;
+
             try
             {
-                var executable = ResolveChromiumExecutable(options.ChromiumExecutablePath);
-                if (string.IsNullOrWhiteSpace(executable))
+                Exception lastEx = null;
+
+                for (var attempt = 0; attempt <= MaxRetries; attempt++)
                 {
-                    failure = new FileNotFoundException(
-                        "No Chrome/Edge executable found. Install Google Chrome or Microsoft Edge.");
-                    return false;
-                }
-
-                var tempRoot = Path.Combine(Path.GetTempPath(), "FA.HtmlToPDF", Guid.NewGuid().ToString("N"));
-                Directory.CreateDirectory(tempRoot);
-                var htmlPath = Path.Combine(tempRoot, "input.html");
-                File.WriteAllText(htmlPath, html, new UTF8Encoding(false));
-                var htmlUri = new Uri(htmlPath).AbsoluteUri;
-
-                // Pick a random free TCP port for Chrome remote debugging
-                var debugPort = FindFreePort();
-
-                var startInfo = new ProcessStartInfo
-                {
-                    FileName = executable,
-                    Arguments =
-                        "--headless=new " +
-                        "--disable-gpu " +
-                        "--no-sandbox " +
-                        "--allow-file-access-from-files " +
-                        "--enable-local-file-accesses " +
-                        "--disable-extensions " +
-                        // Memory / startup reduction flags
-                        "--no-first-run " +
-                        "--disable-default-apps " +
-                        "--disable-sync " +
-                        "--disable-translate " +
-                        "--disable-dev-shm-usage " +
-                        "--disable-background-networking " +
-                        "--metrics-recording-only " +
-                        "--disable-client-side-phishing-detection " +
-                        "--disable-hang-monitor " +
-                        "--disable-domain-reliability " +
-                        "--remote-debugging-port=" + debugPort + " " +
-                        "about:blank",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    WorkingDirectory = tempRoot
-                };
-
-                Process chromeProcess = null;
-                try
-                {
-                    chromeProcess = Process.Start(startInfo);
-                    if (chromeProcess == null)
+                    if (attempt > 0)
                     {
-                        failure = new InvalidOperationException("Failed to start Chromium process.");
-                        return false;
+                        // Signal the host that the previous attempt failed.
+                        // If Chrome has crashed it will be restarted before the next tab is opened.
+                        ChromiumProcessHost.Instance.NotifyFailure();
+                        Thread.Sleep(200 * attempt); // brief back-off before retry
                     }
 
-                    // Drain stdout/stderr asynchronously — prevents Chrome from blocking
-                    // when its internal output buffers fill up (can cause deadlocks otherwise)
-                    chromeProcess.OutputDataReceived += (_, __) => { };
-                    chromeProcess.ErrorDataReceived += (_, __) => { };
-                    chromeProcess.BeginOutputReadLine();
-                    chromeProcess.BeginErrorReadLine();
-
-                    var cdpBase = "http://127.0.0.1:" + debugPort;
-
-                    // Wait until Chrome's CDP HTTP endpoint is ready
-                    if (!WaitForCdpReady(cdpBase, timeoutMs: 12000))
-                    {
-                        failure = new TimeoutException(
-                            "Timed out waiting for Chromium CDP endpoint on port " + debugPort + ".");
-                        return false;
-                    }
-
-                    // Get the WebSocket URL of the first (about:blank) tab
-                    var wsUrl = GetFirstTabWebSocketUrl(cdpBase);
-                    if (string.IsNullOrEmpty(wsUrl))
-                    {
-                        failure = new InvalidOperationException("Could not retrieve CDP WebSocket URL.");
-                        return false;
-                    }
-
-                    // Paper dimensions in inches (CDP Page.printToPDF uses inches).
-                    // 0 = auto-detect from HTML content after load.
-                    var paperW = options.PageWidth > 0 ? options.PageWidth * PointsToInches : 0.0;
-                    var paperH = options.PageHeight > 0 ? options.PageHeight * PointsToInches : 0.0;
-
-                    pdfBytes = RunCdpSession(
-                        wsUrl, htmlUri,
-                        paperW, paperH,
-                        options.MarginTop * PointsToInches,
-                        options.MarginBottom * PointsToInches,
-                        options.MarginLeft * PointsToInches,
-                        options.MarginRight * PointsToInches,
-                        options.TimeoutMs);
-
-                    if (pdfBytes == null || pdfBytes.Length == 0)
-                    {
-                        failure = new InvalidOperationException("Chromium CDP returned empty PDF data.");
-                        return false;
-                    }
-
-                    return true;
-                }
-                finally
-                {
+                    ChromiumProcessHost.TabHandle tab;
                     try
                     {
-                        if (chromeProcess != null && !chromeProcess.HasExited)
-                            chromeProcess.Kill();
+                        // Slot-bounded: blocks until a concurrency slot is free.
+                        // Timeout = options.TimeoutMs so a waiting request never outlives its SLA.
+                        tab = ChromiumProcessHost.Instance.AcquireTab(
+                            options.ChromiumExecutablePath, options.TimeoutMs);
                     }
-                    catch { }
-                    try { chromeProcess?.Dispose(); } catch { }
-                    TryDeleteDirectory(tempRoot);
+                    catch (Exception ex)
+                    {
+                        lastEx = ex;
+                        continue; // retry
+                    }
+
+                    try
+                    {
+                        using (tab)
+                        {
+                            var paperW = options.PageWidth > 0 ? options.PageWidth * PointsToInches : 0.0;
+                            var paperH = options.PageHeight > 0 ? options.PageHeight * PointsToInches : 0.0;
+
+                            pdfBytes = RunCdpSession(
+                                tab.WsUrl, htmlUri,
+                                paperW, paperH,
+                                options.MarginTop * PointsToInches,
+                                options.MarginBottom * PointsToInches,
+                                options.MarginLeft * PointsToInches,
+                                options.MarginRight * PointsToInches,
+                                options.TimeoutMs);
+                        }
+
+                        if (pdfBytes == null || pdfBytes.Length == 0)
+                        {
+                            lastEx = new InvalidOperationException("Chromium CDP returned empty PDF data.");
+                            pdfBytes = null;
+                            continue; // retry
+                        }
+
+                        ChromiumProcessHost.Instance.NotifySuccess(); // reset failure counter
+                        return true; // success
+                    }
+                    catch (Exception ex)
+                    {
+                        lastEx = ex;
+                        // Tab is disposed by the using block — slot already released.
+                    }
                 }
+
+                failure = lastEx ?? new InvalidOperationException("Chromium conversion failed after " + (MaxRetries + 1) + " attempts.");
+                return false;
             }
             catch (Exception ex)
             {
                 failure = ex;
                 return false;
+            }
+            finally
+            {
+                TryDeleteDirectory(tempRoot);
             }
         }
 
@@ -363,52 +320,6 @@ namespace FA.HtmlToPDF.Utilities
         }
 
         // ─────────────────────────────────────────────────────────────────────────
-        // CDP HTTP helpers
-        // ─────────────────────────────────────────────────────────────────────────
-
-        private static bool WaitForCdpReady(string cdpBase, int timeoutMs)
-        {
-            var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-            while (DateTime.UtcNow < deadline)
-            {
-                try
-                {
-                    var r = _http.GetAsync(cdpBase + "/json/version").GetAwaiter().GetResult();
-                    if (r.IsSuccessStatusCode) return true;
-                }
-                catch { }
-                Thread.Sleep(150);
-            }
-            return false;
-        }
-
-        private static string GetFirstTabWebSocketUrl(string cdpBase)
-        {
-            for (var attempt = 0; attempt < 4; attempt++)
-            {
-                string json;
-                try
-                {
-                    json = _http.GetStringAsync(cdpBase + "/json/list").GetAwaiter().GetResult();
-                }
-                catch
-                {
-                    Thread.Sleep(300);
-                    continue;
-                }
-
-                var url = ExtractJsonStringField(json, "webSocketDebuggerUrl");
-                if (!string.IsNullOrEmpty(url))
-                    return url;
-
-                // No tab yet — ask Chrome to open one
-                try { _http.GetStringAsync(cdpBase + "/json/new").GetAwaiter().GetResult(); } catch { }
-                Thread.Sleep(300);
-            }
-            return null;
-        }
-
-        // ─────────────────────────────────────────────────────────────────────────
         // JSON helpers (no external library)
         // ─────────────────────────────────────────────────────────────────────────
 
@@ -441,45 +352,6 @@ namespace FA.HtmlToPDF.Utilities
         private static string EscapeJson(string s)
         {
             return s.Replace("\\", "\\\\").Replace("\"", "\\\"");
-        }
-
-        // ─────────────────────────────────────────────────────────────────────────
-        // Utilities
-        // ─────────────────────────────────────────────────────────────────────────
-
-        private static int FindFreePort()
-        {
-            var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            listener.Stop();
-            return port;
-        }
-
-        private static string ResolveChromiumExecutable(string preferredPath)
-        {
-            if (!string.IsNullOrWhiteSpace(preferredPath) && File.Exists(preferredPath))
-                return preferredPath;
-
-            var pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-            var pf86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
-            var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-
-            var candidates = new[]
-            {
-                Path.Combine(pf,    "Google",    "Chrome", "Application", "chrome.exe"),
-                Path.Combine(pf86,  "Google",    "Chrome", "Application", "chrome.exe"),
-                Path.Combine(local, "Google",    "Chrome", "Application", "chrome.exe"),
-                Path.Combine(pf,    "Microsoft", "Edge",   "Application", "msedge.exe"),
-                Path.Combine(pf86,  "Microsoft", "Edge",   "Application", "msedge.exe"),
-                Path.Combine(local, "Microsoft", "Edge",   "Application", "msedge.exe")
-            };
-
-            foreach (var candidate in candidates)
-                if (File.Exists(candidate))
-                    return candidate;
-
-            return null;
         }
 
         private static void TryDeleteDirectory(string path)

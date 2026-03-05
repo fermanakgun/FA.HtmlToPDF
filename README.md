@@ -1,6 +1,6 @@
 ﻿# FA.HtmlToPDF
 
-.NET 4.8, Windows. HTML  PDF. Harici NuGet bağımlılığı yok.
+.NET 4.8, Windows. HTML PDF. Harici NuGet bağımlılığı yok.
 
 ---
 
@@ -11,10 +11,16 @@ Chrome bulunamazsa `System.Windows.Forms.WebBrowser` + bitmap pipeline'a düşer
 
 ```
 HtmlToPdfConverter
-   HtmlContentPreprocessor       path normalize, kırık CSS <link> temizle
-       ChromiumPdfEngine          CDP: Page.printToPDF (printBackground:true)
-       WebBrowserHtmlRenderer     Fallback: IE Trident  bitmap  PDF
+   HtmlContentPreprocessor       ← path normalize, kırık CSS <link> temizle
+       ChromiumPdfEngine          ← her istek için tek Chrome'dan sekme al
+           ChromiumProcessHost    ← singleton: Chrome'u canlı tutar
+       WebBrowserHtmlRenderer     ← Fallback: IE Trident → bitmap → PDF
 ```
+
+**Eşzamanlı istekler:** İlk çağrıda Chrome bir kez başlatılır ve process hayatta kalır.  
+Sonraki her dönüşüm `PUT /json/new` (~50 ms) ile yeni bir sekme açar, iş bitince `GET /json/close` ile kapatır.  
+N eşzamanlı istek → 1 Chrome process + sıra bekleyen sekmeler (bounded concurrency).  
+Hatalı dönüşüm otomatik olarak 2 kez yeniden denenir; Chrome çökerse sıfırdan başlatılır.
 
 ---
 
@@ -69,61 +75,85 @@ var options = new HtmlToPdfOptions
 
 ## HtmlToPdfOptions
 
-| Özellik | Tip | Varsayılan | Açıklama |
-|---|---|---|---|
-| `PageWidth` | `float` | `0` | PDF point. `0` = otomatik |
-| `PageHeight` | `float` | `0` | PDF point. `0` = otomatik |
-| `MarginTop/Bottom/Left/Right` | `float` | `0` | PDF point |
-| `TimeoutMs` | `int` | `45000` | Chrome CDP timeout |
-| `ChromiumExecutablePath` | `string` | `null` | `null` = Program Files'ta ara |
-| `HtmlBaseUrl` | `string` | `null` | Relative path'ler için base URL |
-| `PreferChromium` | `bool` | `true` | CDP motorunu dene |
-| `FallbackToLegacyRenderer` | `bool` | `true` | Başarısız olursa IE'ye düş |
+| Özellik                       | Tip      | Varsayılan | Açıklama                        |
+| ----------------------------- | -------- | ---------- | ------------------------------- |
+| `PageWidth`                   | `float`  | `0`        | PDF point. `0` = otomatik       |
+| `PageHeight`                  | `float`  | `0`        | PDF point. `0` = otomatik       |
+| `MarginTop/Bottom/Left/Right` | `float`  | `0`        | PDF point                       |
+| `TimeoutMs`                   | `int`    | `45000`    | Chrome CDP timeout              |
+| `ChromiumExecutablePath`      | `string` | `null`     | `null` = Program Files'ta ara   |
+| `HtmlBaseUrl`                 | `string` | `null`     | Relative path'ler için base URL |
+| `PreferChromium`              | `bool`   | `true`     | CDP motorunu dene               |
+| `FallbackToLegacyRenderer`    | `bool`   | `true`     | Başarısız olursa IE'ye düş      |
 
 ---
 
 ## CDP Pipeline
 
 ```
-chrome --headless=new --remote-debugging-port=<port>
-  
-   Page.enable
-   Page.navigate("file:///input.html")
-   wait: Page.loadEventFired
-   Runtime.evaluate("document.fonts.ready", awaitPromise:true)
-   Page.getLayoutMetrics             auto page size (PageWidth/Height = 0 ise)
-   Page.printToPDF({ printBackground:true, paperWidth, paperHeight, margins })
-         base64  byte[]
+[İlk istek]
+ChromiumProcessHost.EnsureAlive()
+  └─ chrome --headless=new --remote-debugging-port=<port>  (bir kez başlatılır)
+
+[Her istek — MaxConcurrentConversions slotu dahilinde]
+SemaphoreSlim.Wait()                   ← slot boşalana kadar bekle
+PUT /json/new                          ← yeni sekme ~50 ms
+  └─ Page.enable
+  └─ Page.navigate("file:///input.html")
+  └─ wait: Page.loadEventFired
+  └─ Runtime.evaluate("document.fonts.ready", awaitPromise:true)
+  └─ Page.getLayoutMetrics              (PageWidth/Height = 0 ise)
+  └─ Page.printToPDF({ printBackground:true, ... })
+        └─ base64 → byte[]
+GET /json/close/{tabId}                ← sekme kapatılır + slot serbest bırakılır
 ```
 
-`printBackground: true`  CSS border, background-color, box-shadow gibi tüm görsel özelliklerin PDF'e yansıması için zorunlu parametredir. CLI `--print-to-pdf` flag'inin bu parametreye karşılığı yoktur.
+`printBackground: true` — CSS border, background-color, box-shadow gibi tüm görsel özelliklerin PDF'e yansıması için zorunlu parametredir. CLI `--print-to-pdf` flag'inin bu parametreye karşılığı yoktur.
 
 ---
 
 ## Performans
 
-> **Ortam:** 11th Gen Intel Core i5-1135G7 @ 2.40 GHz  Windows 11 Enterprise  Release build  
-> **Giriş:** Banka makbuzu HTML (~5 KB, satır içi CSS, tablo yapısı, Türkçe metin)  
-> **Ölçüm:** 5 ardışık soğuk başlatma (her çalışmada Chrome yeniden başlatıldı)
+> **Ortam:** 11th Gen Intel Core i5-1135G7 @ 2.40 GHz · Windows 11 Enterprise · Release build  
+> **Girdi:** Banka makbuzu HTML (~5 KB, satır içi CSS, tablo yapısı, Türkçe metin)  
+> **Mimari:** Tek Chrome process, paylaşımlı sekme havuzu (`ChromiumProcessHost`)
 
-| Metrik | Değer |
-|---|---|
-| Minimum | 4.870 ms |
-| Maksimum | 5.469 ms |
-| **Ortalama** | **5.183 ms** |
-| Üretilen PDF boyutu | ~2.1 MB |
+### Soğuk başlatma vs ısınmış
 
-### Süre Dağılımı (Tahmini)
+| Senaryo                                | Süre          |
+| -------------------------------------- | ------------- |
+| Soğuk başlatma (Chrome yok, ilk istek) | ~5.000 ms     |
+| **Isınmış, tek istek**                 | **~1.436 ms** |
 
-| Aşama | Süre |
-|---|---|
-| Chrome başlatma + CDP hazır | ~3.000 ms |
-| `Page.navigate` + `loadEventFired` | ~300 ms |
-| `document.fonts.ready` | ~100 ms |
-| `Page.printToPDF` | ~700 ms |
-| **Toplam** | **~4.95.5 s** |
+### Eşzamanlı yük testi (ısınmış Chrome, `MaxConcurrentConversions = 8`)
 
-Sürenin büyük bölümünü Chrome soğuk başlatma oluşturur. Aynı süreç içinde birden fazla dönüşüm yapılacaksa Chrome'u ısıtılmış tutmak (persistent CDP session) ortalamayı ~12 s'ye indirebilir.
+| Eşzamanlı istek | Başarılı      | Duvar süresi  | Verim      |
+| --------------- | ------------- | ------------- | ---------- |
+| 1               | 1 / 1         | 912 ms        | 1.1 /s     |
+| 10              | 10 / 10       | 7.949 ms      | 1.3 /s     |
+| **50**          | **50 / 50**   | **49.364 ms** | **1.0 /s** |
+| **100**         | **100 / 100** | **67.262 ms** | **1.5 /s** |
+
+> Tüm istekler başarılı — hata yoktur. Limit üzerindeki istekler slot boşalana kadar bekler; slot boşaldığı anda anında işleme girer.
+
+### Bounded concurrency davranışı
+
+`ChromiumProcessHost.MaxConcurrentConversions` (varsayılan: `min(ProcessorCount, 8)`)  
+bu değeri aşan istekler slot boşalana kadar bekler — birer birer servis edilir.
+
+```
+ 50 istek, limit = 8:
+ tur 1 → 8 istek aynı anda (~1.4 s)
+ tur 2 → 8 istek aynı anda (~1.4 s)
+ ...
+ toplam ≈ ⌈50/8⌉ × 1.4 s ≈ 9 s, 0 hata
+```
+
+Ayarlamak için servis başlamadan önce:
+
+```csharp
+ChromiumProcessHost.MaxConcurrentConversions = 6;
+```
 
 ---
 
@@ -146,6 +176,7 @@ FA.HtmlToPDF/
     HtmlToPdfService.cs
  Utilities/
     ChromiumPdfEngine.cs
+    ChromiumProcessHost.cs
     HtmlContentPreprocessor.cs
  Runner/
      Startup.cs

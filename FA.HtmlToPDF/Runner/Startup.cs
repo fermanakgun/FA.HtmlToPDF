@@ -1,6 +1,11 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 using FA.HtmlToPDF;
+using FA.HtmlToPDF.Models;
 
 namespace FA.HtmlToPDF.Runner
 {
@@ -143,9 +148,87 @@ namespace FA.HtmlToPDF.Runner
             var outputDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "output");
             Directory.CreateDirectory(outputDirectory);
 
+            if (args.Length > 0 && args[0] == "--bench")
+            {
+                RunBenchmark(outputDirectory);
+                return;
+            }
+
             var outputFilePath = Path.Combine(outputDirectory, "receipt-sample.pdf");
             HtmlToPdfConverter.SaveToFile(SampleHtml, outputFilePath);
             Console.WriteLine("PDF oluşturuldu: " + outputFilePath);
+        }
+
+        private static void RunBenchmark(string outputDirectory)
+        {
+            // Benchmark seçenekleri: fallback kapalı (Chrome hatası direkt gelsin),
+            // yüksek eşzamanlılık için timeout artırıldı.
+            var benchOptions = new HtmlToPdfOptions
+            {
+                PreferChromium = true,
+                FallbackToLegacyRenderer = false,
+                TimeoutMs = 120000
+            };
+
+            // --- Isınma: Chrome'u ayağa kaldır ---
+            Console.WriteLine("[BENCH] Isınma (1 dönüşüm)...");
+            HtmlToPdfConverter.ConvertToBytes(SampleHtml, benchOptions);
+            Console.WriteLine("[BENCH] Chrome hazır.\n");
+
+            foreach (var concurrency in new[] { 1, 10, 50, 100 })
+            {
+                var times = new long[concurrency];
+                var errors = new string[concurrency];
+                var tasks = new Task[concurrency];
+
+                var wallSw = Stopwatch.StartNew();
+
+                for (var i = 0; i < concurrency; i++)
+                {
+                    var idx = i;
+                    tasks[i] = Task.Run(() =>
+                    {
+                        var sw = Stopwatch.StartNew();
+                        try
+                        {
+                            HtmlToPdfConverter.ConvertToBytes(SampleHtml, benchOptions);
+                        }
+                        catch (Exception ex)
+                        {
+                            var inner = ex;
+                            while (inner.InnerException != null) inner = inner.InnerException;
+                            errors[idx] = inner.Message;
+                        }
+                        sw.Stop();
+                        times[idx] = sw.ElapsedMilliseconds;
+                    });
+                }
+
+                Task.WaitAll(tasks);
+                wallSw.Stop();
+
+                var successTimes = times.Where((t, i) => errors[i] == null).ToArray();
+                var errorCount = errors.Count(e => e != null);
+
+                Console.WriteLine("=== Eşzamanlı: " + concurrency + " istek ===");
+                if (successTimes.Length > 0)
+                {
+                    Console.WriteLine("  Başarılı  : " + successTimes.Length + " / " + concurrency);
+                    Console.WriteLine("  Min       : " + successTimes.Min() + " ms");
+                    Console.WriteLine("  Max       : " + successTimes.Max() + " ms");
+                    Console.WriteLine("  Ort.      : " + (long)successTimes.Average() + " ms");
+                }
+                else
+                {
+                    Console.WriteLine("  Başarılı  : 0 / " + concurrency);
+                }
+                if (errorCount > 0)
+                    Console.WriteLine("  Hata      : " + errorCount + "  [" + errors.First(e => e != null) + "]");
+                Console.WriteLine("  Duvar     : " + wallSw.ElapsedMilliseconds + " ms  (toplam geçen süre)");
+                if (successTimes.Length > 0)
+                    Console.WriteLine("  Verim     : " + (successTimes.Length * 1000 / wallSw.ElapsedMilliseconds) + " dönüşüm/s");
+                Console.WriteLine();
+            }
         }
     }
 }
