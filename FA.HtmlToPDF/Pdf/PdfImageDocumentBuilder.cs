@@ -14,11 +14,12 @@ namespace FA.HtmlToPDF.Pdf
     {
         public byte[] Build(Bitmap renderedHtml, HtmlToPdfOptions options)
         {
-            var slices = SliceBitmapIntoPages(renderedHtml, options);
+            float pageW, pageH;
+            var slices = SliceBitmapIntoPages(renderedHtml, options, out pageW, out pageH);
 
             try
             {
-                return GeneratePdfDocument(slices, options);
+                return GeneratePdfDocument(slices, options, pageW, pageH);
             }
             finally
             {
@@ -29,10 +30,17 @@ namespace FA.HtmlToPDF.Pdf
             }
         }
 
-        private static List<ImageSlice> SliceBitmapIntoPages(Bitmap source, HtmlToPdfOptions options)
+        private static List<ImageSlice> SliceBitmapIntoPages(
+            Bitmap source, HtmlToPdfOptions options,
+            out float pageWidthPt, out float pageHeightPt)
         {
-            var contentWidthPt = options.PageWidth - options.MarginLeft - options.MarginRight;
-            var contentHeightPt = options.PageHeight - options.MarginTop - options.MarginBottom;
+            // Auto-size: derive page dimensions from the rendered bitmap.
+            // 96 DPI (CSS pixels) → 72 DPI (PDF points): multiply by 72/96 = 0.75
+            pageWidthPt = options.PageWidth > 0 ? options.PageWidth : source.Width * 72f / 96f;
+            pageHeightPt = options.PageHeight > 0 ? options.PageHeight : source.Height * 72f / 96f;
+
+            var contentWidthPt = pageWidthPt - options.MarginLeft - options.MarginRight;
+            var contentHeightPt = pageHeightPt - options.MarginTop - options.MarginBottom;
             var targetContentWidthPx = Math.Max(1, (int)Math.Round(contentWidthPt * 96f / 72f));
 
             if (contentWidthPt <= 0 || contentHeightPt <= 0)
@@ -95,7 +103,9 @@ namespace FA.HtmlToPDF.Pdf
             return rawRgb;
         }
 
-        private static byte[] GeneratePdfDocument(List<ImageSlice> slices, HtmlToPdfOptions options)
+        private static byte[] GeneratePdfDocument(
+            List<ImageSlice> slices, HtmlToPdfOptions options,
+            float pageWidthPt, float pageHeightPt)
         {
             var encoding = Encoding.GetEncoding("ISO-8859-1", EncoderFallback.ReplacementFallback, DecoderFallback.ReplacementFallback);
             var objectContents = new List<byte[]>();
@@ -122,14 +132,14 @@ namespace FA.HtmlToPDF.Pdf
             {
                 var imageName = "Im" + (i + 1).ToString(CultureInfo.InvariantCulture);
                 var pageObj = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " +
-                              options.PageWidth.ToString("0.##", CultureInfo.InvariantCulture) + " " +
-                              options.PageHeight.ToString("0.##", CultureInfo.InvariantCulture) +
+                              pageWidthPt.ToString("0.##", CultureInfo.InvariantCulture) + " " +
+                              pageHeightPt.ToString("0.##", CultureInfo.InvariantCulture) +
                               "] /Resources << /XObject << /" + imageName + " " + imageObjectIds[i] + " 0 R >> >> /Contents " +
                               contentObjectIds[i] + " 0 R >>";
 
                 objectContents.Add(EncodeText(pageObj, encoding));
 
-                var streamText = BuildImagePlacementStream(slices[i], options, imageName);
+                var streamText = BuildImagePlacementStream(slices[i], options, imageName, pageHeightPt);
                 objectContents.Add(BuildStreamObject(encoding.GetBytes(streamText), string.Empty, encoding));
                 objectContents.Add(BuildImageObject(slices[i], encoding));
             }
@@ -195,10 +205,12 @@ namespace FA.HtmlToPDF.Pdf
                 ">>";
         }
 
-        private static string BuildImagePlacementStream(ImageSlice slice, HtmlToPdfOptions options, string imageName)
+        private static string BuildImagePlacementStream(
+            ImageSlice slice, HtmlToPdfOptions options,
+            string imageName, float pageHeightPt)
         {
             var drawX = options.MarginLeft;
-            var drawY = options.PageHeight - options.MarginTop - slice.DisplayHeightPt;
+            var drawY = pageHeightPt - options.MarginTop - slice.DisplayHeightPt;
 
             var sb = new StringBuilder();
             sb.Append("q\n");

@@ -120,9 +120,10 @@ namespace FA.HtmlToPDF.Utilities
                         return false;
                     }
 
-                    // Paper dimensions in inches (CDP Page.printToPDF uses inches)
-                    var paperW = options.PageWidth * PointsToInches;
-                    var paperH = options.PageHeight * PointsToInches;
+                    // Paper dimensions in inches (CDP Page.printToPDF uses inches).
+                    // 0 = auto-detect from HTML content after load.
+                    var paperW = options.PageWidth > 0 ? options.PageWidth * PointsToInches : 0.0;
+                    var paperH = options.PageHeight > 0 ? options.PageHeight * PointsToInches : 0.0;
 
                     pdfBytes = RunCdpSession(
                         wsUrl, htmlUri,
@@ -198,7 +199,15 @@ namespace FA.HtmlToPDF.Utilities
                     cts.Token);
                 ReadUntilResponseId(ws, 4, cts.Token);
 
-                // 5. Page.printToPDF — printBackground:true is the critical parameter
+                // 5. Auto-detect page size from rendered content when not explicitly set.
+                //    Page.getLayoutMetrics returns the full content dimensions in CSS pixels
+                //    (Chrome renders at 96 PPI), independent of any viewport setting.
+                if (paperW <= 0 || paperH <= 0)
+                {
+                    ResolveAutoPageSize(ws, cts.Token, ref paperW, ref paperH);
+                }
+
+                // 6. Page.printToPDF — printBackground:true is the critical parameter
                 //    that tells Chrome to print borders, backgrounds and box-shadows.
                 //    The CLI --print-to-pdf flag has no equivalent for this.
                 var printParams = string.Format(
@@ -217,10 +226,57 @@ namespace FA.HtmlToPDF.Utilities
 
                 SendCdp(ws, 5, "Page.printToPDF", printParams, cts.Token);
 
-                // 6. Read response — contains base64-encoded PDF in result.data
+                // 7. Read response — contains base64-encoded PDF in result.data
                 var response = ReadUntilResponseId(ws, 5, cts.Token);
                 return string.IsNullOrEmpty(response) ? null : ExtractBase64PdfData(response);
             }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────────
+        // Auto page-size resolution via CDP
+        // ─────────────────────────────────────────────────────────────────────────
+
+        private static void ResolveAutoPageSize(
+            ClientWebSocket ws, CancellationToken token,
+            ref double paperW, ref double paperH)
+        {
+            // Page.getLayoutMetrics returns contentSize in CSS pixels (Chrome at 96 PPI).
+            // This is the preferred CDP method — it measures the full rendered content
+            // regardless of the current viewport size.
+            SendCdp(ws, 6, "Page.getLayoutMetrics", "{}", token);
+            var resp = ReadUntilResponseId(ws, 6, token);
+            if (resp == null) return;
+
+            // Find the "contentSize" block in the JSON response, then extract width/height.
+            var csIdx = resp.IndexOf("\"contentSize\"", StringComparison.Ordinal);
+            if (csIdx < 0) return;
+
+            var w = ExtractJsonDouble(resp, "width", csIdx);
+            var h = ExtractJsonDouble(resp, "height", csIdx);
+
+            // Fallback to A4 if the query returns nothing sensible
+            if (paperW <= 0) paperW = w > 0 ? w / 96.0 : 8.27;
+            if (paperH <= 0) paperH = h > 0 ? h / 96.0 : 11.69;
+        }
+
+        /// <summary>
+        /// Extracts the numeric value of a JSON field by scanning forward from
+        /// <paramref name="startIndex"/>. No JSON library needed.
+        /// </summary>
+        private static double ExtractJsonDouble(string json, string fieldName, int startIndex = 0)
+        {
+            var marker = "\"" + fieldName + "\":";
+            var pos = json.IndexOf(marker, startIndex, StringComparison.Ordinal);
+            if (pos < 0) return 0;
+            pos += marker.Length;
+            while (pos < json.Length && json[pos] == ' ') pos++;
+            var end = pos;
+            while (end < json.Length && (char.IsDigit(json[end]) || json[end] == '.' || json[end] == '-' || json[end] == 'e' || json[end] == 'E' || json[end] == '+'))
+                end++;
+            if (end <= pos) return 0;
+            double result;
+            return double.TryParse(json.Substring(pos, end - pos),
+                NumberStyles.Float, CultureInfo.InvariantCulture, out result) ? result : 0;
         }
 
         // ─────────────────────────────────────────────────────────────────────────
