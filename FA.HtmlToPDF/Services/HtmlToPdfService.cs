@@ -71,5 +71,22 @@ namespace FA.HtmlToPDF.Services
         {
             SaveToFile(HtmlSamples.ReceiptHtml, outputFilePath, options);
         }
+
+        /// <summary>
+        /// Returns the preprocessed HTML that will be sent to Chrome/WebBrowser.
+        /// Useful for debugging: save to a .html file and open in a browser to
+        /// verify the layout before generating the PDF.
+        /// </summary>
+        public string GetPreparedHtml(string html, HtmlToPdfOptions options = null)
+        {
+            var effectiveOptions = options ?? new HtmlToPdfOptions();
+            effectiveOptions.Validate();
+            return HtmlContentPreprocessor.Prepare(html, effectiveOptions);
+        }
+
+        public string GetSampleReceiptPreparedHtml(HtmlToPdfOptions options = null)
+        {
+            return GetPreparedHtml(HtmlSamples.ReceiptHtml, options);
+        }
     }
 }

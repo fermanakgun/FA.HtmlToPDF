@@ -48,5 +48,20 @@ namespace FA.HtmlToPDF
         {
             DefaultService.SaveSampleReceiptPdf(outputFilePath, options);
         }
+
+        /// <summary>
+        /// Returns the preprocessed HTML string (missing CSS stripped, paths normalized)
+        /// that will be fed to Chrome when generating the PDF.
+        /// Save it to a .html file and open in a browser to verify layout.
+        /// </summary>
+        public static string GetPreparedHtml(string html, HtmlToPdfOptions options = null)
+        {
+            return DefaultService.GetPreparedHtml(html, options);
+        }
+
+        public static string GetSampleReceiptPreparedHtml(HtmlToPdfOptions options = null)
+        {
+            return DefaultService.GetSampleReceiptPreparedHtml(options);
+        }
     }
 }

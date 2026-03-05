@@ -9,9 +9,46 @@ namespace FA.HtmlToPDF.Utilities
     {
         public static string Prepare(string html, HtmlToPdfOptions options)
         {
-            var withBase = InjectBaseTag(html, options.HtmlBaseUrl);
-            var withCompatibility = EnsureBrowserCompatibility(withBase);
-            return NormalizeLocalFilePaths(withCompatibility);
+            var result = html;
+            result = InjectBaseTag(result, options.HtmlBaseUrl);
+            result = EnsureBrowserCompatibility(result);
+            result = NormalizeLocalFilePaths(result);
+            // Remove <link> tags pointing to local files that do not exist on
+            // this machine. Chrome tries to fetch them, gets file-not-found,
+            // and falls back to browser defaults which break table layouts.
+            result = StripMissingLocalCssLinks(result);
+            return result;
+        }
+
+        /// <summary>
+        /// Removes &lt;link rel="stylesheet"&gt; tags whose href resolves to a
+        /// local file:// path that does not exist on disk.
+        /// </summary>
+        private static string StripMissingLocalCssLinks(string html)
+        {
+            // Match <link ... href="file:///C:/..."  or href="C:\..." ... />
+            return Regex.Replace(
+                html,
+                @"<link\b[^>]*\bhref\s*=\s*(?:[""'])(?<uri>(?:file:///|[A-Za-z]:/|[A-Za-z]:\\)[^""'?#]+)[^>]*/?>",
+                m =>
+                {
+                    var uri = m.Groups["uri"].Value;
+                    // Convert file URI → local path if needed
+                    string localPath;
+                    if (uri.StartsWith("file:///", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try { localPath = new Uri(uri).LocalPath; }
+                        catch { localPath = uri; }
+                    }
+                    else
+                    {
+                        localPath = uri;
+                    }
+
+                    // Keep the tag only if the file actually exists
+                    return File.Exists(localPath) ? m.Value : string.Empty;
+                },
+                RegexOptions.IgnoreCase | RegexOptions.Singleline);
         }
 
         private static string EnsureBrowserCompatibility(string html)
