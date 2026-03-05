@@ -4,10 +4,10 @@
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>{BCDA50A0-CC7A-41A6-BD86-579B0CCA70FD}</ProjectGuid>
-    <OutputType>Library</OutputType>
-    <RootNamespace>FA.HtmlToPDF</RootNamespace>
-    <AssemblyName>FA.HtmlToPDF</AssemblyName>
+    <ProjectGuid>{E24D51B1-6FC7-4A44-AB27-6C4762A33099}</ProjectGuid>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>FA.HtmlToPDF.Runner</RootNamespace>
+    <AssemblyName>FA.HtmlToPDF.Runner</AssemblyName>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
@@ -35,8 +35,6 @@
   <ItemGroup>
     <Reference Include="System" />
     <Reference Include="System.Core" />
-    <Reference Include="System.Drawing" />
-    <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml.Linq" />
     <Reference Include="System.Data.DataSetExtensions" />
     <Reference Include="Microsoft.CSharp" />
@@ -45,22 +43,13 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Abstractions\IHtmlRenderer.cs" />
-    <Compile Include="Abstractions\IPdfDocumentBuilder.cs" />
-    <Compile Include="Models\HtmlToPdfOptions.cs" />
-    <Compile Include="Models\ImageSlice.cs" />
-    <Compile Include="Pdf\PdfImageDocumentBuilder.cs" />
-    <Compile Include="Rendering\WebBrowserHtmlRenderer.cs" />
-    <Compile Include="Samples\HtmlSamples.cs" />
-    <Compile Include="Services\HtmlToPdfConverter.cs" />
-    <Compile Include="Services\HtmlToPdfService.cs" />
-    <Compile Include="Utilities\ChromiumPdfEngine.cs" />
-    <Compile Include="Utilities\HtmlContentPreprocessor.cs" />
-    <Compile Include="Utilities\PdfEncodingHelper.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Startup.cs" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="App.config" />
+    <ProjectReference Include="..\FA.HtmlToPDF.csproj">
+      <Project>{BCDA50A0-CC7A-41A6-BD86-579B0CCA70FD}</Project>
+      <Name>FA.HtmlToPDF</Name>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
