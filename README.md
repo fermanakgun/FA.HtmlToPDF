@@ -216,4 +216,6 @@ FA.HtmlToPDF.Runner.exe
 
 ## Lisans
 
-MIT
+Bu proje [MIT Lisansı](LICENSE) ile lisanslanmıştır.
+
+Kullanabilir, kopyalayabilir, değiştirebilir, birleştirebilir, yayımlayabilir, dağıtabilir, alt lisanslayabilir ve satabilirsiniz.

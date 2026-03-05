@@ -3,6 +3,18 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/main/VisualStudio.gitignore
 
+# ── FA.HtmlToPDF project-specific ────────────────────────────────────────────
+
+# Runner output files (generated PDFs and debug HTML previews)
+**/output/
+Runner/bin/
+Runner/obj/
+
+# Chromium CDP temp files written to %TEMP%\FA.HtmlToPDF\
+# (not in repo but noted for clarity — already outside workspace)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 # User-specific files
 *.rsuser
 *.suo
