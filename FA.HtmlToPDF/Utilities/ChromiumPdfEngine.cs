@@ -100,15 +100,14 @@ namespace FA.HtmlToPDF.Utilities
                     // Paper dimensions in inches (CDP Page.printToPDF uses inches)
                     var paperW = options.PageWidth * PointsToInches;
                     var paperH = options.PageHeight * PointsToInches;
-                    var mTop = options.MarginTop * PointsToInches;
-                    var mBot = options.MarginBottom * PointsToInches;
-                    var mLeft = options.MarginLeft * PointsToInches;
-                    var mRight = options.MarginRight * PointsToInches;
+                    // Margins are intentionally 0 here: the HTML's own body { padding }
+                    // handles whitespace. Adding margins both in @page CSS and in
+                    // Page.printToPDF causes double-margin and a narrower content area.
 
                     pdfBytes = RunCdpSession(
                         wsUrl, htmlUri,
                         paperW, paperH,
-                        mTop, mBot, mLeft, mRight,
+                        0, 0, 0, 0,
                         options.ChromiumTimeoutMs);
 
                     if (pdfBytes == null || pdfBytes.Length == 0)
@@ -363,9 +362,12 @@ namespace FA.HtmlToPDF.Utilities
 
             var styleBlock =
                 "<style type='text/css'>\n" +
+                // Paper size only — margin set to 0 here.
+                // The HTML's own body { padding } handles whitespace around content.
+                // Setting @page margin AND body padding causes double-margin / shrunken layout.
                 "@page {\n" +
                 "  size: " + pageWmm + "mm " + pageHmm + "mm;\n" +
-                "  margin: " + mTopMm + "mm " + mRightMm + "mm " + mBotMm + "mm " + mLeftMm + "mm;\n" +
+                "  margin: 0;\n" +
                 "}\n" +
                 // Force Chrome print pipeline to render all colours/borders
                 "* {\n" +
@@ -373,21 +375,24 @@ namespace FA.HtmlToPDF.Utilities
                 "  print-color-adjust: exact !important;\n" +
                 "  color-adjust: exact !important;\n" +
                 "}\n" +
-                // Table layout normalization — mirrors what Bootstrap/typical app CSS provides.
-                // Without these, Chrome browser-defaults collapse empty <td> cells and
-                // ignore percentage widths, breaking the expected multi-column layout.
+                // Chrome does NOT inherit font-size into <table>/<td> by default.
+                // Without this reset, table text renders at the browser default (~16px)
+                // instead of the 11px defined in the .offrctl scoped CSS classes.
+                "html, body, table, tbody, tr, td, th, p, div, span {\n" +
+                "  font-family: Arial, sans-serif;\n" +
+                "  font-size: 11px;\n" +
+                "}\n" +
+                // Table layout normalization
                 "table {\n" +
                 "  border-spacing: 0;\n" +
                 "  empty-cells: show;\n" +
                 "}\n" +
-                // Honour the HTML border attribute so border='1' tables actually show borders
+                // Honour the HTML border attribute so border='1' tables show borders
                 "table[border] td, table[border] th {\n" +
                 "  border: 1px solid #000;\n" +
                 "}\n" +
-                // Honour width attributes on <td>/<th> elements
                 "td[width], th[width] {\n" +
                 "  min-width: 0;\n" +
-                "  overflow: hidden;\n" +
                 "}\n" +
                 "</style>";
 
