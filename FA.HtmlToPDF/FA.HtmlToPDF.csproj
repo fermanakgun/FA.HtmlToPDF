@@ -1,65 +1,43 @@
-<?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
-    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
-    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>{BCDA50A0-CC7A-41A6-BD86-579B0CCA70FD}</ProjectGuid>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
     <OutputType>Library</OutputType>
-    <RootNamespace>FA.HtmlToPDF</RootNamespace>
     <AssemblyName>FA.HtmlToPDF</AssemblyName>
-    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
-    <FileAlignment>512</FileAlignment>
-    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
-    <Deterministic>true</Deterministic>
+    <RootNamespace>FA.HtmlToPDF</RootNamespace>
+
+    <!-- NuGet metadata -->
+    <PackageId>Fermanakgun.HtmlToPDF</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>fermanakgun</Authors>
+    <Company>fermanakgun</Company>
+    <Product>Fermanakgun.HtmlToPDF</Product>
+    <Description>Zero-dependency .NET 4.8 library that converts HTML to PDF using a headless Chrome/Edge process via Chrome DevTools Protocol (CDP). Pixel-perfect rendering, concurrent conversions, automatic retry and Chrome auto-restart.</Description>
+    <PackageTags>html pdf chrome cdp headless dotnet netframework</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/fermanakgun/FA.HtmlToPDF</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/fermanakgun/FA.HtmlToPDF</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Copyright>Copyright  2026 fermanakgun</Copyright>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
   </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-    <PlatformTarget>AnyCPU</PlatformTarget>
-    <DebugSymbols>true</DebugSymbols>
-    <DebugType>full</DebugType>
-    <Optimize>false</Optimize>
-    <OutputPath>bin\Debug\</OutputPath>
-    <DefineConstants>DEBUG;TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
-    <PlatformTarget>AnyCPU</PlatformTarget>
-    <DebugType>pdbonly</DebugType>
-    <Optimize>true</Optimize>
-    <OutputPath>bin\Release\</OutputPath>
-    <DefineConstants>TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-  </PropertyGroup>
+
+  <!-- Include NuGet-specific README in the package root -->
   <ItemGroup>
-    <Reference Include="System" />
-    <Reference Include="System.Core" />
-    <Reference Include="System.Drawing" />
-    <Reference Include="System.Windows.Forms" />
-    <Reference Include="System.Xml.Linq" />
-    <Reference Include="System.Data.DataSetExtensions" />
-    <Reference Include="Microsoft.CSharp" />
-    <Reference Include="System.Data" />
+  </ItemGroup>
+
+  <!-- Exclude the Runner CLI project from the library build -->
+  <ItemGroup>
+    <Compile Remove="Runner\**" />
+    <EmbeddedResource Remove="Runner\**" />
+    <None Remove="Runner\**" />
+  </ItemGroup>
+
+  <!-- Framework assemblies not included in the net48 SDK default reference set -->
+  <ItemGroup>
     <Reference Include="System.Net.Http" />
-    <Reference Include="System.Xml" />
   </ItemGroup>
-  <ItemGroup>
-    <Compile Include="Abstractions\IHtmlRenderer.cs" />
-    <Compile Include="Abstractions\IPdfDocumentBuilder.cs" />
-    <Compile Include="Models\HtmlToPdfOptions.cs" />
-    <Compile Include="Models\ImageSlice.cs" />
-    <Compile Include="Pdf\PdfImageDocumentBuilder.cs" />
-    <Compile Include="Rendering\WebBrowserHtmlRenderer.cs" />
-    <Compile Include="Services\HtmlToPdfConverter.cs" />
-    <Compile Include="Services\HtmlToPdfService.cs" />
-    <Compile Include="Utilities\ChromiumPdfEngine.cs" />
-    <Compile Include="Utilities\ChromiumProcessHost.cs" />
-    <Compile Include="Utilities\HtmlContentPreprocessor.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="App.config" />
-  </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+
 </Project>

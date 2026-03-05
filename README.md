@@ -1,8 +1,13 @@
-﻿# FA.HtmlToPDF
+﻿# Fermanakgun.HtmlToPDF
 
-.NET 4.8, Windows. HTML PDF. Harici NuGet bağımlılığı yok.
+[![NuGet](https://img.shields.io/nuget/v/Fermanakgun.HtmlToPDF.svg)](https://www.nuget.org/packages/Fermanakgun.HtmlToPDF)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/Fermanakgun.HtmlToPDF.svg)](https://www.nuget.org/packages/Fermanakgun.HtmlToPDF)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![.NET Framework](https://img.shields.io/badge/.NET%20Framework-4.8-blue.svg)](https://dotnet.microsoft.com/download/dotnet-framework)
 
 ---
+Zero-dependency .NET 4.8 library that converts HTML to PDF using a headless **Chrome/Edge** process via Chrome DevTools Protocol (CDP).
+No wkhtmltopdf. No Puppeteer. No WebView2. No NuGet dependencies.
 
 ## Nasıl Çalışır
 
