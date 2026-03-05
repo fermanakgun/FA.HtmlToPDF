@@ -136,15 +136,18 @@ namespace FA.HtmlToPDF.Utilities
             {
                 ws.ConnectAsync(new Uri(wsUrl), cts.Token).GetAwaiter().GetResult();
 
-                // 1. Enable the Page CDP domain
-                SendCdp(ws, 1, "Page.enable", "{}", cts.Token);
-                ReadUntilResponseId(ws, 1, cts.Token);
-
-                // 2. Navigate to our local HTML file
+                // 1+2. Pipeline Page.enable and Page.navigate together — no need to wait for
+                //      the Page.enable response before sending Page.navigate.
+                //      CDP guarantees sequential execution within a session, so Chrome
+                //      will always enable the Page domain before it starts navigating.
+                //      This saves one full WebSocket round-trip per conversion.
                 var navParams = "{\"url\":\"" + EscapeJson(htmlUri) + "\"}";
+                SendCdp(ws, 1, "Page.enable", "{}", cts.Token);
                 SendCdp(ws, 2, "Page.navigate", navParams, cts.Token);
 
-                // 3. Wait for Page.loadEventFired — page + CSS fully loaded
+                // 3. Wait for Page.loadEventFired — page + CSS fully loaded.
+                //    WaitForCdpEvent drains all messages on the wire (including the
+                //    id:1 and id:2 responses) so the loop stays clean.
                 WaitForCdpEvent(ws, "Page.loadEventFired", timeoutMs: 15000, cts.Token);
 
                 // 4. Wait for all fonts to finish loading via document.fonts.ready.

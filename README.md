@@ -69,7 +69,7 @@ var options = new HtmlToPdfOptions
 };
 ```
 
-`PageWidth` / `PageHeight` = `0` (varsayılan) olduğunda boyut, Chrome'un `Page.getLayoutMetrics` sonucundan otomatik hesaplanır; HTML'de ne varsa o kadar sayfa üretilir.
+`PageWidth` / `PageHeight` = `0` (varsayılan) olduğunda `paperWidth`/`paperHeight` parametreleri `Page.printToPDF`'e hiç gönderilmez; Chrome kendi varsayılan kağıt boyutunu (A4) kullanır — tıpkı tarayıcıda "Yazdır → PDF olarak kaydet" yapıldığındaki gibi.
 
 ---
 
@@ -98,17 +98,18 @@ ChromiumProcessHost.EnsureAlive()
 [Her istek — MaxConcurrentConversions slotu dahilinde]
 SemaphoreSlim.Wait()                   ← slot boşalana kadar bekle
 PUT /json/new                          ← yeni sekme ~50 ms
-  └─ Page.enable
-  └─ Page.navigate("file:///input.html")
+  ├─ Page.enable   ┐  pipeline: ikisi birden gönderilir,
+  └─ Page.navigate ┘  Page.enable yanıtı beklenmez (~1 RTT tasarruf)
   └─ wait: Page.loadEventFired
   └─ Runtime.evaluate("document.fonts.ready", awaitPromise:true)
-  └─ Page.getLayoutMetrics              (PageWidth/Height = 0 ise)
   └─ Page.printToPDF({ printBackground:true, ... })
         └─ base64 → byte[]
 GET /json/close/{tabId}                ← sekme kapatılır + slot serbest bırakılır
 ```
 
 `printBackground: true` — CSS border, background-color, box-shadow gibi tüm görsel özelliklerin PDF'e yansıması için zorunlu parametredir. CLI `--print-to-pdf` flag'inin bu parametreye karşılığı yoktur.
+
+Explicit boyut verilmediğinde `paperWidth`/`paperHeight` parametreleri gönderilmez; Chrome doğrudan A4 üretir. Fazladan `Page.getLayoutMetrics` + viewport override adımları gerekmiyor.
 
 ---
 
@@ -120,19 +121,19 @@ GET /json/close/{tabId}                ← sekme kapatılır + slot serbest bır
 
 ### Soğuk başlatma vs ısınmış
 
-| Senaryo                                | Süre          |
-| -------------------------------------- | ------------- |
-| Soğuk başlatma (Chrome yok, ilk istek) | ~5.000 ms     |
-| **Isınmış, tek istek**                 | **~1.436 ms** |
+| Senaryo                                | Süre        |
+| -------------------------------------- | ----------- |
+| Soğuk başlatma (Chrome yok, ilk istek) | ~5.000 ms   |
+| **Isınmış, tek istek**                 | **~738 ms** |
 
 ### Eşzamanlı yük testi (ısınmış Chrome, `MaxConcurrentConversions = 8`)
 
-| Eşzamanlı istek | Başarılı      | Duvar süresi  | Verim      |
-| --------------- | ------------- | ------------- | ---------- |
-| 1               | 1 / 1         | 912 ms        | 1.1 /s     |
-| 10              | 10 / 10       | 7.949 ms      | 1.3 /s     |
-| **50**          | **50 / 50**   | **49.364 ms** | **1.0 /s** |
-| **100**         | **100 / 100** | **67.262 ms** | **1.5 /s** |
+| Eşzamanlı istek | Başarılı      | Duvar süresi  | Min       | Maks      | Ort.      |
+| --------------- | ------------- | ------------- | --------- | --------- | --------- |
+| 1               | 1 / 1         | 738 ms        | 738 ms    | 738 ms    | 738 ms    |
+| 10              | 10 / 10       | 6.917 ms      | 3.565 ms  | 6.641 ms  | 5.680 ms  |
+| **50**          | **50 / 50**   | **49.604 ms** | 7.740 ms  | 49.604 ms | 31.154 ms |
+| **100**         | **100 / 100** | **70.624 ms** | 18.576 ms | 70.612 ms | 49.398 ms |
 
 > Tüm istekler başarılı — hata yoktur. Limit üzerindeki istekler slot boşalana kadar bekler; slot boşaldığı anda anında işleme girer.
 
